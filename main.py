@@ -5,37 +5,49 @@ from os import environ as env
 from urllib.parse import quote_plus
 
 
+class S3Song(object):
+    def __init__(self, s3_bucket, s3_object, s3_endpoint, action):
+        self.s3_bucket = s3_bucket
+        self.s3_object = s3_object
+        self.s3_endpoint = s3_endpoint
+        # create or delete
+        self.action = action
 
-async def handler(event, context, callback=None):
-    sanitize()
+        self.file_name = Path(self.s3_object).name.__str__()
+        self.file_path = f"/tmp/{self.file_name}"
+
+
+async def handler(song: S3Song):
+    sanitize_env()
+    sanitize_file(song)
+    loglevel = env.get('LOGLEVEL', 'WARNING').upper()
+    logging.getLogger().setLevel(logging.getLevelName(loglevel))
+
     session = boto3.session.Session()
     s3 = session.client(
         service_name='s3',
-        endpoint_url='https://storage.yandexcloud.net'
+        endpoint_url=song.s3_endpoint
     )
-    for msg in event["messages"]:
-        bucket_id = msg.get("details").get("bucket_id")
-        object_id = msg.get("details").get("object_id")
-        song = Path(msg.get("details").get("object_id")).name.__str__()
 
-        if msg.get("event_metadata").get("event_type") == "yandex.cloud.events.storage.ObjectCreate":
-            get_object_response = s3.get_object(Bucket=bucket_id, Key=object_id)
-            with open(f"/tmp/{song}", "wb") as f:
-                f.write(get_object_response['Body'].read())
-            song_data = get_tags(f"/tmp/{song}")
-            Path.unlink(Path(f"/tmp/{song}"), missing_ok=True)
-            await handle_post(bucket_id, object_id, song_data)
-        if msg.get("event_metadata").get("event_type") == "yandex.cloud.events.storage.ObjectDelete":
-            await handle_delete(bucket_id, object_id)
+    if song.action == "create":
+        get_object_response = s3.get_object(Bucket=song.s3_bucket, Key=song.s3_object)
+        with open(song.file_path, "wb") as f:
+            f.write(get_object_response['Body'].read())
+        song_data = get_tags(song)
+        Path.unlink(Path(song.file_path), missing_ok=True)
+        await handle_post(song.s3_bucket, song.s3_object, song_data)
+    if song.action == "delete":
+        await handle_delete(song.s3_bucket, song.s3_object)
 
 
-def sanitize():
+def sanitize_env():
     required_env = [
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "KOEL_HOST",
         "KOEL_APP_KEY"
     ]
+
     for var in required_env:
         if not env.get(var, False):
             logging.error(f"{var} is not set")
@@ -43,70 +55,180 @@ def sanitize():
     return None
 
 
-def get_tags(song, meta=None):
+def sanitize_file(song: S3Song):
+    supported_ext = [
+        "mp3",
+        "ogg",
+        "m4a",
+        "flac"
+    ]
+    if Path(song.s3_object).suffix.lstrip(".") not in supported_ext:
+        logging.warning(f"File {song.file_name} is unsupported. Skipping")
+        raise SystemExit
+    return None
+
+
+def get_tags(song: S3Song):
     try:
-        tag = TinyTag.get(song)
+        tag = TinyTag.get(song.file_path, image=True)
     except Exception as e:
         raise e
     image_data = tag.get_image()
-    if tag.artist:
-        artist = tag.artist
-    elif env.get("ASSUME_TAGS", False):
-        artist = Path(song).stem.split(" - ", 1)[0]
-        if artist == Path(song).stem or artist.isdecimal():
-            artist = "No Artist"
-    if tag.title:
-        title = tag.title
-    elif env.get("ASSUME_TAGS", False):
-        try:
-            title = Path(song).stem.split(" - ", 1)[1]
-        except IndexError:
-            title = Path(song).stem
-    try:
-        lyrics = tag.extra["lyrics"]
-    except KeyError:
-        lyrics = ""
-
     koel_tags = json.loads(tag.__str__())
-    koel_tags["lyrics"] = lyrics
-    koel_tags["artist"] = artist
-    koel_tags["title"] = title
+
+    try:
+        koel_tags["lyrics"] = tag.extra["lyrics"]
+    except KeyError:
+        koel_tags["lyrics"] = ""
+
     if image_data:
         koel_tags["cover"] = {
-            "data": base64.urlsafe_b64encode(image_data).decode(),
+            "data": base64.b64encode(image_data).decode(),
             "extension": imghdr.what("song", h=image_data)
         }
-    # Extra for compilations
-    # This is not going to work until support for compilation attribute is added into Koel, sorry
-    if meta and env.get("COMPILATIONS_PATH", "compilations") and env.get("COMPILATIONS_AS_ALBUMARTIST", False):
-        koel_tags["albumartist"] = quote_plus(Path(meta["details"]["object_id"]).relative_to(env["COMPILATIONS_PATH"]).parent.__str__())
+
+    if not (koel_tags["artist"] and koel_tags["album"] and koel_tags["title"]):
+        if env.get("ASSUME_TAGS", False) :
+            logging.info(f"Assuming tags for {song.s3_object}")
+            koel_tags = assume_tags(song, koel_tags)
+            logging.debug(f"Tags assumed: {koel_tags}")
+
     return koel_tags
 
 
+def assume_tags(song: S3Song, tags):
+    def general():
+        """
+            Only filenames. For files like:
+            Artist Name - Song Name.mp3
+        :return: {title: "Song Name", artist: "Artist Name", album: ""}
+        """
+        ret = {"album": "", "track": ""}  # we don't have any info about album and track in this case
+
+        artist = song.file_name.split(" - ", 1)[0]
+        if artist == song.file_name or artist.isdecimal():
+            artist = "No Artist"
+        ret["artist"] = artist
+
+        try:
+            ret["title"] = Path(song.file_name).stem.split(" - ", 1)[1]
+        except IndexError:
+            try:
+                if Path(song.file_name).stem.split(".", 1)[0].lstrip().isdecimal():
+                    ret["title"] = Path(song.file_name).stem.split(".", 1)[1].lstrip()
+                else:
+                    ret["title"] = Path(song.file_name).stem
+            except IndexError:
+                ret["title"] = Path(song.file_name).stem
+        # Extra for compilations
+        # This is not going to work until support for compilation attribute is added into Koel, sorry
+        if env.get("COMPILATIONS_PATH", "compilations") and env.get("ASSUME_COMPILATIONS", False):
+            ret[env.get("ASSUME_COMPILATIONS_TAG", "albumartist")] = quote_plus(
+                Path(song.s3_object).relative_to(env["COMPILATIONS_PATH"]).parent.__str__())
+        return ret
+
+    def by_album(root):
+        """
+            For files in discographies. Path should be
+            ALBUMS_PATH/Artist Name/Album Name/Song Name.mp3
+            or
+            ALBUMS_PATH/Artist Name/2000 - Album Name/01. Song Name.mp3
+            or
+            ALBUMS_PATH/Artist Name/demos/Album Name/01. Song Name.mp3
+            or combination of these
+            if ASSUME_ADD_YEAR is set, then year is added to album name
+        :return: {title: "Song Name", artist: "Artist Name", album: "Album Name"}
+        """
+        pathparts = Path(song.s3_object).relative_to(root).parts
+        ret = {"artist": pathparts[0]}
+        if pathparts[-2].split(" - ", 1)[0].isdecimal():
+            year_in_album = True
+            year_separator = " - "
+        elif pathparts[-2].split(".", 1)[0].isdecimal():
+            year_in_album = True
+            year_separator = "."
+        else:
+            year_in_album = False
+
+        if year_in_album:
+            if env.get("ASSUME_ADD_ALBUM_YEAR", False):
+                ret["album"] = pathparts[-2]
+            else:
+                ret["album"] = pathparts[-2].split(year_separator, 1)[1].lstrip()
+        else:
+            ret["album"] = pathparts[-2]
+
+        if pathparts[-1].split(".", 1)[0].isdecimal():
+            ret["title"] = Path(pathparts[-1]).stem.split(".", 1)[1].lstrip()
+            ret['track'] = Path(pathparts[-1]).stem.split(".", 1)[0]
+        elif pathparts[-1].split(" - ", 1)[0].isdecimal():
+            ret["title"] = Path(pathparts[-1]).stem.split(" - ", 1)[1]
+            ret['track'] = Path(pathparts[-1]).stem.split(" - ", 1)[0]
+        else:
+            ret["title"] = Path(pathparts[-1]).stem
+            ret["track"] = ""
+        return ret
+    pth = env.get("ALBUMS_PATH", "albums")
+    if pth and song.s3_object.startswith(pth):
+        logging.debug("Assuming tags based on ALBUMS_PATH")
+        try:
+            assumed = by_album(pth)
+        except Exception as e:
+            logging.debug(e)
+            logging.debug("Assuming by ALBUMS_PATH failed. Falling back to general assuming")
+            assumed = general()
+    else:
+        logging.debug("General assuming")
+        assumed = general()
+    for tag in ["title", "album", "artist", "track"]:
+        if not tags.get(tag):
+            tags[tag] = assumed[tag]
+    return tags
+
+
 async def handle_delete(bucket, key):
+    response = requests.delete(
+        url=f"{env['KOEL_HOST']}/api/os/s3/song",
+        data={
+            "bucket":  bucket,
+            "key": key,
+            "appKey": env["KOEL_APP_KEY"]
+        }
+    )
     try:
-        requests.delete(
-            url=f"{env['KOEL_HOST']}/api/os/s3/song",
-            data={
-                "bucket":  bucket,
-                "key": key,
-                "appkey": env["KOEL_APP_KEY"]
-            }
-        )
-    except Exception as e:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        logging.error(e)
         raise e
 
 
 async def handle_post(bucket, key, song_data):
+    response = requests.post(
+        url=f"{env['KOEL_HOST']}/api/os/s3/song",
+        json={
+            "bucket":  bucket,
+            "key": key,
+            "tags": song_data,
+            "appKey": env["KOEL_APP_KEY"]
+        }
+    )
+    logging.debug(response.request.body)
     try:
-        requests.post(
-            url=f"{env['KOEL_HOST']}/api/os/s3/song",
-            json={
-                "bucket":  bucket,
-                "key": key,
-                "tags": song_data,
-                "appkey": env["KOEL_APP_KEY"]
-            }
-        )
-    except Exception as e:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        logging.error(e)
         raise e
+
+
+def event(event, context=None, callback=None):
+    """
+        Returns the event from Yandex s3 trigger
+    """
+    logging.getLogger().setLevel(logging.INFO)
+    logging.info(json.dumps(event))
+    return {
+        'statusCode': 200,
+        'body': json.dumps({
+            'event': event,
+        }),
+    }
