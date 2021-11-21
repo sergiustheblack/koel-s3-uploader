@@ -41,7 +41,13 @@ Initially made for use with Yandex Cloud Object Storage and [Koel](https://koel.
 | ~~ASSUME_COMPILATIONS~~    | ~~False~~           | ~~True~~           | Not supported by Koel: add tag with name of your compilation based on path |  
 | ~~COMPILATIONS_PATH~~      | ~~compilations~~    | ~~my-awseme-lib~~  | Not supported by Koel: root path of your compilations |
 | ~~ASSUME_COMPILATIONS_TAG~~| ~~albumartist~~     | ~~compilation~~    | Not supported by Koel: tag to assign compilation name to |
-## Assuming
+## Important: usage of non-AWS s3
+As for Koel v5.1.8, to use Koel with non-AWS Object Storage, you have to modify config/aws.php in the project.
+Add `'endpoint' => env('AWS_ENDPOINT', 'https://s3.amazonaws.com'),` to it and set up `AWS_ENDPOINT` at `.env` of your Koel installation.
+Info about entrypoint should be provided by your cloud provider. You might be required to use docker bind mount for this file.
+
+## Advanced features
+### Assuming
 Assuming is pupulation of missing tags in records. It never rewrites any existing tags, but trying to assume if they miss.
 Currently supported tags are _Title_, _Artist_, _Album_, _Track_. To enable this feature, set ASSUME_TAGS environment variable to True.
 
@@ -61,10 +67,10 @@ Examples:
 | Dope/albums/2003 - Group Therapy/03. Falling Away.mp3 | | Title: Falling Away, Artist: No Artist |
 
 However, this behaviour might be buggy and turned off by default.
-## Important: usage of non-AWS s3
-As for Koel v5.1.8, to use Koel with non-AWS Object Storage, you have to modify config/aws.php in the project.
-Add `'endpoint' => env('AWS_ENDPOINT', 'https://s3.amazonaws.com'),` to it and set up `AWS_ENDPOINT` at `.env` of your Koel installation.
-Info about entrypoint should be provided by your cloud provider. You might be required to use docker bind mount for this file.
+### Telegram notifications
+You can send notifications about failed uploads to Telegram.
+To use it, first uncomment `python-telegram-bot` in `requirements.txt` before upload,
+create Telegram bot via BotFather and assign `TELEGRAM_CHAT` and `TELEGRAM_TOKEN` environment variables in lambda.
 ## Development
 Potentially this app can work with any s3 provider which supports s3 triggers and lambda-like functions.
 But we need to determine event structure passed by trigger.

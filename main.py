@@ -4,6 +4,9 @@ import json, base64, imghdr, requests, logging, boto3
 from os import environ as env
 from urllib.parse import quote_plus
 
+if env.get("TELEGRAM_CHAT") and env.get("TELEGRAM_TOKEN"):
+    import telegram
+    from telegram.parsemode import ParseMode
 
 class S3Song(object):
     def __init__(self, s3_bucket, s3_object, s3_endpoint, action):
@@ -18,26 +21,33 @@ class S3Song(object):
 
 
 async def handler(song: S3Song):
-    sanitize_env()
-    sanitize_file(song)
-    loglevel = env.get('LOGLEVEL', 'WARNING').upper()
-    logging.getLogger().setLevel(logging.getLevelName(loglevel))
+    try:
+        sanitize_env()
+        sanitize_file(song)
+        loglevel = env.get('LOGLEVEL', 'WARNING').upper()
+        logging.getLogger().setLevel(logging.getLevelName(loglevel))
 
-    session = boto3.session.Session()
-    s3 = session.client(
-        service_name='s3',
-        endpoint_url=song.s3_endpoint
-    )
+        session = boto3.session.Session()
+        s3 = session.client(
+            service_name='s3',
+            endpoint_url=song.s3_endpoint
+        )
 
-    if song.action == "create":
-        get_object_response = s3.get_object(Bucket=song.s3_bucket, Key=song.s3_object)
-        with open(song.file_path, "wb") as f:
-            f.write(get_object_response['Body'].read())
-        song_data = get_tags(song)
-        Path.unlink(Path(song.file_path), missing_ok=True)
-        await handle_post(song.s3_bucket, song.s3_object, song_data)
-    if song.action == "delete":
-        await handle_delete(song.s3_bucket, song.s3_object)
+        if song.action == "create":
+            get_object_response = s3.get_object(Bucket=song.s3_bucket, Key=song.s3_object)
+            with open(song.file_path, "wb") as f:
+                f.write(get_object_response['Body'].read())
+            song_data = get_tags(song)
+            Path.unlink(Path(song.file_path), missing_ok=True)
+            await handle_post(song.s3_bucket, song.s3_object, song_data)
+        if song.action == "delete":
+            await handle_delete(song.s3_bucket, song.s3_object)
+    except Exception as e:
+        if env.get("TELEGRAM_CHAT") and env.get("TELEGRAM_TOKEN"):
+            telegram_send_error(f"Error handling {song.s3_object}\n{e}")
+            raise e
+        else:
+            raise e
 
 
 def sanitize_env():
@@ -51,7 +61,7 @@ def sanitize_env():
     for var in required_env:
         if not env.get(var, False):
             logging.error(f"{var} is not set")
-            raise RuntimeError
+            raise RuntimeError(f"{var} is not set")
     return None
 
 
@@ -64,7 +74,7 @@ def sanitize_file(song: S3Song):
     ]
     if Path(song.s3_object).suffix.lstrip(".") not in supported_ext:
         logging.warning(f"File {song.file_name} is unsupported. Skipping")
-        raise SystemExit
+        raise SystemExit(f"File {song.file_name} is unsupported. Skipping")
     return None
 
 
@@ -72,7 +82,8 @@ def get_tags(song: S3Song):
     try:
         tag = TinyTag.get(song.file_path, image=True)
     except Exception as e:
-        raise e
+        logging.error("Error getting tags")
+        raise RuntimeError(f"Error getting tags: {e}")
     image_data = tag.get_image()
     koel_tags = json.loads(tag.__str__())
 
@@ -218,6 +229,17 @@ async def handle_post(bucket, key, song_data):
     except requests.exceptions.HTTPError as e:
         logging.error(e)
         raise e
+
+
+def telegram_send_error(text):
+    bot = telegram.Bot(env.get("TELEGRAM_TOKEN"))
+    parse_mode = ParseMode.HTML
+    text = f"\u2757Error upload to Koel:\n{text}"
+    try:
+        bot.send_message(env.get("TELEGRAM_CHAT"), text, parse_mode=parse_mode)
+    except Exception as e:
+        logging.error(f'Error sending message via Telegram: {e}')
+        pass
 
 
 def event(event, context=None, callback=None):
