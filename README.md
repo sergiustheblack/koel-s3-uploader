@@ -37,7 +37,10 @@ Initially made for use with Yandex Cloud Object Storage and [Koel](https://koel.
 | LOGLEVEL                   | WARNING             | DEBUG              | Logging level upon function invocation |
 | ASSUME_TAGS                | False               | True               | Assuming: Try to create missing tags (see ref below) |
 | ALBUMS_PATH                | albums              | artists            | Assuming: Root folder of your discographies | 
-| ASSUME_ADD_ALBUM_YEAR      | False               | True               | Assuming: If album folder contains year, add to album name | 
+| ASSUME_ADD_ALBUM_YEAR      | False               | True               | Assuming: If album folder contains year, add to album name |
+| REMOVE_ALBUMARTIST_TAG     | False               | True               | If True, removes albumartist from tags before upload (useless for now in Koel) Incompatible with ASSUME_COMPILATIONS |
+| TELEGRAM_TOKEN             | None                | \<token\>          | Enables processing error reporting to Telegram |
+| TELEGRAM_CHAT              | None                | \<chat_id\>        | Enables processing error reporting to Telegram |
 | ~~ASSUME_COMPILATIONS~~    | ~~False~~           | ~~True~~           | Not supported by Koel: add tag with name of your compilation based on path |  
 | ~~COMPILATIONS_PATH~~      | ~~compilations~~    | ~~my-awseme-lib~~  | Not supported by Koel: root path of your compilations |
 | ~~ASSUME_COMPILATIONS_TAG~~| ~~albumartist~~     | ~~compilation~~    | Not supported by Koel: tag to assign compilation name to |

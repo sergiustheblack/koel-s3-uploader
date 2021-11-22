@@ -62,6 +62,9 @@ def sanitize_env():
         if not env.get(var):
             logging.error(f"{var} is not set")
             raise RuntimeError(f"{var} is not set")
+
+    if env.get("ASSUME_COMPILATIONS") and env.get("REMOVE_ALBUMARTIST_TAG"):
+        raise RuntimeError("Variables ASSUME_COMPILATIONS and REMOVE_ALBUMARTIST_TAG are mutually exclusive")
     return None
 
 
@@ -98,7 +101,10 @@ def get_tags(song: S3Song):
             "extension": imghdr.what("song", h=image_data)
         }
 
-    if not (koel_tags["artist"] and koel_tags["album"] and koel_tags["title"]):
+    if env.get("REMOVE_ALBUMARTIST_TAG"):
+        koel_tags.pop("albumartist", None)
+
+    if not (koel_tags["artist"] or koel_tags["album"] or koel_tags["title"]):
         if env.get("ASSUME_TAGS"):
             logging.info(f"Assuming tags for {song.s3_object}")
             koel_tags = assume_tags(song, koel_tags)
