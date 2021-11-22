@@ -72,7 +72,7 @@ def sanitize_file(song: S3Song):
         "m4a",
         "flac"
     ]
-    if Path(song.s3_object).suffix.lstrip(".") not in supported_ext:
+    if Path(song.s3_object).suffix.lstrip(".").lower() not in supported_ext:
         logging.warning(f"File {song.file_name} is unsupported. Skipping")
         raise SystemExit(f"File {song.file_name} is unsupported. Skipping")
     return None
