@@ -59,7 +59,7 @@ def sanitize_env():
     ]
 
     for var in required_env:
-        if not env.get(var, False):
+        if not env.get(var):
             logging.error(f"{var} is not set")
             raise RuntimeError(f"{var} is not set")
     return None
@@ -99,7 +99,7 @@ def get_tags(song: S3Song):
         }
 
     if not (koel_tags["artist"] and koel_tags["album"] and koel_tags["title"]):
-        if env.get("ASSUME_TAGS", False) :
+        if env.get("ASSUME_TAGS"):
             logging.info(f"Assuming tags for {song.s3_object}")
             koel_tags = assume_tags(song, koel_tags)
             logging.debug(f"Tags assumed: {koel_tags}")
@@ -133,9 +133,9 @@ def assume_tags(song: S3Song, tags):
                 ret["title"] = Path(song.file_name).stem
         # Extra for compilations
         # This is not going to work until support for compilation attribute is added into Koel, sorry
-        if env.get("COMPILATIONS_PATH", "compilations") and env.get("ASSUME_COMPILATIONS", False):
+        if env.get("ASSUME_COMPILATIONS"):
             ret[env.get("ASSUME_COMPILATIONS_TAG", "albumartist")] = quote_plus(
-                Path(song.s3_object).relative_to(env["COMPILATIONS_PATH"]).parent.__str__())
+                Path(song.s3_object).relative_to(env.get("COMPILATIONS_PATH", "compilations")).parent.__str__())
         return ret
 
     def by_album(root):
@@ -162,7 +162,7 @@ def assume_tags(song: S3Song, tags):
             year_in_album = False
 
         if year_in_album:
-            if env.get("ASSUME_ADD_ALBUM_YEAR", False):
+            if env.get("ASSUME_ADD_ALBUM_YEAR"):
                 ret["album"] = pathparts[-2]
             else:
                 ret["album"] = pathparts[-2].split(year_separator, 1)[1].lstrip()
