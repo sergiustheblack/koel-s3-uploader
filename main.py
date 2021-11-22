@@ -260,3 +260,38 @@ def event(event, context=None, callback=None):
             'event': event,
         }),
     }
+
+
+async def sync(s3_bucket: str, s3_endpoint: str, s3_path: str = ""):
+    try:
+        sanitize_env()
+        loglevel = env.get('LOGLEVEL', 'WARNING').upper()
+        logging.getLogger().setLevel(logging.getLevelName(loglevel))
+        session = boto3.session.Session()
+        s3 = session.client(
+            service_name='s3',
+            endpoint_url=s3_endpoint
+        )
+        files = s3.list_objects_v2(Bucket=s3_bucket, Prefix=s3_path)
+        for file in files.get("Contents", []):
+            if file.get("Size", 0) > 0:
+                song = S3Song(
+                    s3_bucket,
+                    file["Key"],
+                    s3_endpoint,
+                    "create"
+                )
+                logging.info(f"Syncing song {song.s3_object}")
+                sanitize_file(song)
+                get_object_response = s3.get_object(Bucket=song.s3_bucket, Key=song.s3_object)
+                with open(song.file_path, "wb") as f:
+                    f.write(get_object_response['Body'].read())
+                song_data = get_tags(song)
+                Path.unlink(Path(song.file_path), missing_ok=True)
+                await handle_post(song.s3_bucket, song.s3_object, song_data)
+    except Exception as e:
+        if env.get("TELEGRAM_CHAT") and env.get("TELEGRAM_TOKEN"):
+            telegram_send_error(f"Error handling {song.s3_object} during sync\n{e}")
+            raise e
+        else:
+            raise e

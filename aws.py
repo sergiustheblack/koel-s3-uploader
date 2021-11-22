@@ -18,3 +18,7 @@ async def handler(event, context=None, callback=None):
             action
         )
         await main.handler(song)
+
+
+async def sync(s3_bucket: str, s3_path: str = ""):
+    await main.sync(s3_bucket, "https://s3.amazonaws.com", s3_path)
