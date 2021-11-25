@@ -20,5 +20,5 @@ async def handler(event, context=None, callback=None):
         await main.handler(song)
 
 
-async def sync(s3_bucket: str, s3_path: str = ""):
-    await main.sync(s3_bucket, "https://storage.yandexcloud.net", s3_path)
+async def sync(s3_bucket: str = None,  s3_path: str = ""):
+    await main.sync(s3_bucket=s3_bucket, s3_path=s3_path, s3_endpoint="https://storage.yandexcloud.net")

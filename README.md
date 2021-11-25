@@ -1,18 +1,19 @@
 # Koel s3 uploader
 
-Initially made for use with Yandex Cloud Object Storage and [Koel](https://koel.dev)
+Initially made for use with Yandex Cloud Object Storage and [Koel](https://koel.dev). 
+Tested on Yandex Cloud, Python 3.9 and Koel v5.1.8 with aws.php modified.
 
 ### Pros
 * Can automatically populate song tags based on filename (if tags are not present)
 * Easy to extend to other s3 platforms
 ### Cons
 * Not tested with AWS currently
-* Usage with Yandex cloud requires modifying Koel's aws config (Koel v5.1.8)
+* Usage with non-AWS object storage requires modifying Koel's aws config (Koel v5.1.8)
 ## Fast start
 1) Download archive from GitHub as zip. Extract it and repack so only repo files exist in the archive (without parent folder)
    bash oneliner: `d=$(unzip ./koel-s3-uploader-yandex.zip 2>&1 | grep creating | awk '{print $NF}') && zip
  -j s3.zip $d/*.py`
-3) Create private s3 bucket, lambda-like function, trigger and service user
+2) Create private s3 bucket, lambda-like function, trigger and service user
    * Yandex
       1) [Bucket](https://cloud.yandex.ru/docs/storage/operations/buckets/create)
       2) [Cloud function](https://cloud.yandex.ru/docs/functions/operations/function/function-create)
@@ -22,11 +23,12 @@ Initially made for use with Yandex Cloud Object Storage and [Koel](https://koel.
        2) [Bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/create-bucket-overview.html)
        3) [Lambda](https://docs.aws.amazon.com/lambda/latest/dg/getting-started-create-function.html)
        4) [Trigger](https://docs.aws.amazon.com/lambda/latest/dg/with-s3-example.html)
-4) When creating cloud function, upload archive from step 1 into it.
-5) Set up at least required environment variables in function settings. Checkout section below.
-6) Select entrypoint for cloud function:
+3) When creating cloud function, upload archive from step 1 into it.
+4) Set up at least required environment variables in function settings. Checkout section below.
+5) Select entrypoint for cloud function:
    * AWS: aws.handler
    * Yandex: yandex.handler
+6) Modify aws.php (see section below)
 ## Environment variable reference
 | Variable                   | Default or required | Example            | Description |
 | ---                        | ---                 | ---                | ---         |
@@ -39,6 +41,7 @@ Initially made for use with Yandex Cloud Object Storage and [Koel](https://koel.
 | ALBUMS_PATH                | albums              | artists            | Assuming: Root folder of your discographies | 
 | ASSUME_ADD_ALBUM_YEAR      | False               | True               | Assuming: If album folder contains year, add to album name |
 | REMOVE_ALBUMARTIST_TAG     | False               | True               | If True, removes albumartist from tags before upload (useless for now in Koel) Incompatible with ASSUME_COMPILATIONS |
+| ASSUME_TAGS_FORCE          | False               | True               | If True, assumed tags rewrites existing in a song |
 | TELEGRAM_TOKEN             | None                | \<token\>          | Enables processing error reporting to Telegram |
 | TELEGRAM_CHAT              | None                | \<chat_id\>        | Enables processing error reporting to Telegram |
 | ~~ASSUME_COMPILATIONS~~    | ~~False~~           | ~~True~~           | Not supported by Koel: add tag with name of your compilation based on path |  
@@ -68,12 +71,21 @@ Examples:
 | albums/Dope/albums/2003 - Group Therapy/Falling Away.mp3 |  | Title: Falling Away, Album: Group Therapy, Artist: Dope |
 | albums/Dope/albums/2003 - Group Therapy/Falling Away.flac | ASSUME_ADD_ALBUM_YEAR=True  | Title: Falling Away, Album: 2003 - Group Therapy, Artist: Dope |
 | Dope/albums/2003 - Group Therapy/03. Falling Away.mp3 | | Title: Falling Away, Artist: No Artist |
+| compilations/Rock/Dope - Falling Away.mp3 | | Title: Falling Away, Artist: Dope |
 
 However, this behaviour might be buggy and turned off by default.
 ### Telegram notifications
 You can send notifications about failed uploads to Telegram.
 To use it, first uncomment `python-telegram-bot` in `requirements.txt` before upload,
 create Telegram bot via BotFather and assign `TELEGRAM_CHAT` and `TELEGRAM_TOKEN` environment variables in lambda.
+## Sync
+Call `<provider>.sync(bucket, path_in_bucket)` instead of handler in lambda or run locally.
+Be aware that syncing downloads songs, for huge music library syncing from local machine might be expensive. 
+Consider it as not regular task. 
+Example:
+```bash
+AWS_ACCESS_KEY_ID=<id> AWS_SECRET_ACCESS_KEY=<key> KOEL_HOST=https://koel.dev KOEL_APP_KEY=312 LOGLEVEL=INFO python3 -c 'import yandex, asyncio; asyncio.run(yandex.sync("my-music-lib", "compilations/test"))'
+```
 ## Development
 Potentially this app can work with any s3 provider which supports s3 triggers and lambda-like functions.
 But we need to determine event structure passed by trigger.
@@ -81,4 +93,6 @@ To understand it, you can call `main.event` function from inside lambda, it will
 
 Then add file with clear platform definition, for example `oracle.py` and create function `handler` inside.
 Put the code needed for parsing and setting required data (object path, bucket name and s3 entrypoint) into `handler`,
-construct object of class `main.S3Song` and call `await main.handler(song)` at the end. Simple. For example see `yandex.py`
+construct object of class `main.S3Song` and call `await main.handler(song)` at the end. Simple. For example see `yandex.py`.
+
+PRs are welcome.

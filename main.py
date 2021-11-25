@@ -16,8 +16,11 @@ class S3Song(object):
         # create or delete
         self.action = action
 
-        self.file_name = Path(self.s3_object).name.__str__()
+        self.file_name = str(Path(self.s3_object).name)
         self.file_path = f"/tmp/{self.file_name}"
+
+    def __str__(self):
+        return str(vars(self))
 
 
 async def handler(song: S3Song):
@@ -52,10 +55,10 @@ async def handler(song: S3Song):
 
 def sanitize_env():
     required_env = [
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
         "KOEL_HOST",
-        "KOEL_APP_KEY"
+        "KOEL_APP_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY"
     ]
 
     for var in required_env:
@@ -77,6 +80,7 @@ def sanitize_file(song: S3Song):
     ]
     if Path(song.s3_object).suffix.lstrip(".").lower() not in supported_ext:
         logging.warning(f"File {song.file_name} is unsupported. Skipping")
+        Path.unlink(Path(song.file_path), missing_ok=True)
         raise SystemExit(f"File {song.file_name} is unsupported. Skipping")
     return None
 
@@ -88,7 +92,7 @@ def get_tags(song: S3Song):
         logging.error("Error getting tags")
         raise RuntimeError(f"Error getting tags: {e}")
     image_data = tag.get_image()
-    koel_tags = json.loads(tag.__str__())
+    koel_tags = json.loads(str(tag))
 
     try:
         koel_tags["lyrics"] = tag.extra["lyrics"]
@@ -104,16 +108,19 @@ def get_tags(song: S3Song):
     if env.get("REMOVE_ALBUMARTIST_TAG"):
         koel_tags.pop("albumartist", None)
 
-    if not (koel_tags["artist"] or koel_tags["album"] or koel_tags["title"]):
-        if env.get("ASSUME_TAGS"):
-            logging.info(f"Assuming tags for {song.s3_object}")
-            koel_tags = assume_tags(song, koel_tags)
-            logging.debug(f"Tags assumed: {koel_tags}")
+    if env.get("ASSUME_TAGS") and env.get("ASSUME_TAGS_FORCE"):
+        logging.info(f"Assuming tags for {song.s3_object}")
+        koel_tags = assume_tags(song, koel_tags, True)
+        logging.info(f"Assuming tags for {song.s3_object}")
+    elif env.get("ASSUME_TAGS") and not (koel_tags["artist"] and koel_tags["album"] and koel_tags["title"]):
+        logging.info(f"Assuming tags for {song.s3_object}")
+        koel_tags = assume_tags(song, koel_tags, False)
+        logging.debug(f"Tags assumed: {koel_tags}")
 
     return koel_tags
 
 
-def assume_tags(song: S3Song, tags):
+def assume_tags(song: S3Song, tags, force = False):
     def general():
         """
             Only filenames. For files like:
@@ -141,7 +148,7 @@ def assume_tags(song: S3Song, tags):
         # This is not going to work until support for compilation attribute is added into Koel, sorry
         if env.get("ASSUME_COMPILATIONS"):
             ret[env.get("ASSUME_COMPILATIONS_TAG", "albumartist")] = quote_plus(
-                Path(song.s3_object).relative_to(env.get("COMPILATIONS_PATH", "compilations")).parent.__str__())
+                str(Path(song.s3_object).relative_to(env.get("COMPILATIONS_PATH", "compilations")).parent))
         return ret
 
     def by_album(root):
@@ -198,7 +205,9 @@ def assume_tags(song: S3Song, tags):
         logging.debug("General assuming")
         assumed = general()
     for tag in ["title", "album", "artist", "track"]:
-        if not tags.get(tag):
+        if assumed.get(tag) and force:
+            tags[tag] = assumed[tag]
+        elif not tags.get(tag):
             tags[tag] = assumed[tag]
     return tags
 
@@ -250,7 +259,7 @@ def telegram_send_error(text):
 
 def event(event, context=None, callback=None):
     """
-        Returns the event from Yandex s3 trigger
+        Returns the event from s3 trigger
     """
     logging.getLogger().setLevel(logging.INFO)
     logging.info(json.dumps(event))
@@ -262,8 +271,25 @@ def event(event, context=None, callback=None):
     }
 
 
-async def sync(s3_bucket: str, s3_endpoint: str, s3_path: str = ""):
+async def sync(s3_bucket: str = None,  s3_path: str = "", s3_endpoint: str = None):
+    """
+        Uploads songs from s3 bucket to Koel
+    :param s3_endpoint:
+    :param s3_bucket:
+    :param s3_path:
+    :return:
+    """
     try:
+        # Since we can call this locally, sanitize arguments.
+        # Environment takes precedence over function args ¯\_(ツ)_/¯
+        s3_endpoint = env.get("SYNC_ENDPOINT", s3_endpoint)
+        s3_bucket = env.get("SYNC_BUCKET", s3_bucket)
+        s3_path = env.get("SYNC_PATH", s3_path)
+        if not s3_endpoint:
+            raise RuntimeError("s3 endpoint not set")
+        if not s3_bucket:
+            raise RuntimeError("s3 bucket not set")
+
         sanitize_env()
         loglevel = env.get('LOGLEVEL', 'WARNING').upper()
         logging.getLogger().setLevel(logging.getLevelName(loglevel))
@@ -282,7 +308,10 @@ async def sync(s3_bucket: str, s3_endpoint: str, s3_path: str = ""):
                     "create"
                 )
                 logging.info(f"Syncing song {song.s3_object}")
-                sanitize_file(song)
+                try:
+                    sanitize_file(song)
+                except SystemExit:
+                    continue
                 get_object_response = s3.get_object(Bucket=song.s3_bucket, Key=song.s3_object)
                 with open(song.file_path, "wb") as f:
                     f.write(get_object_response['Body'].read())
